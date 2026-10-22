@@ -70,10 +70,9 @@ class ConsoleShellMixin:
         head.pack(fill="x")
         title = tk.Frame(head, bg=C["head"])
         title.pack(fill="x")
-        tk.Label(title, text="竞彩推单操作台", bg=C["head"], fg="white", font=self.f_title).pack(side="left", padx=(18, 10), pady=12)
-        tk.Label(title, text="数据采集 / 赛果复盘 / 内容工作台", bg=C["head"], fg="#9ca3af", font=self.f_ui).pack(side="left")
-        tools = tk.Frame(head, bg=C["head"])
-        tools.pack(fill="x", padx=18, pady=(0, 12))
+        tk.Label(title, text="竞彩推单操作台", bg=C["head"], fg="white", font=self.f_title).pack(side="left", padx=(18, 10), pady=8)
+        tools = tk.Frame(title, bg=C["head"])
+        tools.pack(side="right", padx=14)
         for text, cmd in (("设置", self.open_settings), ("规则设置", self.open_rules), ("诊断包", self.make_diag),
                           (("打开推单文件夹" if L.OUT else "打开文件夹"), self.open_output_folder)):
             tk.Button(tools, text=text, command=cmd, bg=C["head2"], fg="white", activebackground="#4b5563", activeforeground="white",
@@ -82,13 +81,13 @@ class ConsoleShellMixin:
         panel = tk.Frame(self, bg=C["card"], highlightbackground=C["line"], highlightthickness=1)
         panel.pack(fill="x", padx=14, pady=(12, 8))
         row0 = tk.Frame(panel, bg=C["card"])
-        row0.pack(fill="x", padx=14, pady=(12, 6))
+        row0.pack(fill="x", padx=14, pady=(8, 4))
         self.btn_go = tk.Button(row0, text="▶  一键更新", command=lambda: self.start_update(True),
                                 bg=C["accent"], fg="white", activebackground=C["accent_dark"], activeforeground="white",
-                                disabledforeground="#dbeafe", relief="flat", bd=0, padx=22, pady=10, cursor="hand2", font=self.f_big)
+                                disabledforeground="#dbeafe", relief="flat", bd=0, padx=22, pady=7, cursor="hand2", font=self.f_big)
         self.btn_go.pack(side="left")
         secondary = tk.Frame(panel, bg=C["card"])
-        secondary.pack(fill="x", padx=14, pady=(0, 10))
+        secondary.pack(fill="x", padx=14, pady=(0, 4))
         self.btn_regen = ttk.Button(secondary, text="只用现有数据重新生成", command=lambda: self.start_update(False))
         self.btn_regen.pack(side="left")
         self.btn_retry = ttk.Button(secondary, text="重试失败项", command=self.retry_failed)
@@ -112,17 +111,20 @@ class ConsoleShellMixin:
             lb.pack(side="left")
             self.step_lbls.append(lb)
         mode = tk.Frame(panel, bg=C["card"])
-        mode.pack(fill="x", padx=14, pady=(4, 8))
+        mode.pack(fill="x", padx=14, pady=(2, 4))
         tk.Label(mode, text="发帖账号：", bg=C["card"], fg=C["muted"], font=self.f_ui).pack(side="left")
         self.mode_var = tk.StringVar(value="280" if int(self.settings.get("limit", 280)) < self.G.DEFAULT_LIMIT else "pro")
         for text, val in (("普通账号（超过280字拆成串）", "280"), ("Premium（长帖不拆）", "pro")):
             ttk.Radiobutton(mode, text=text, value=val, variable=self.mode_var, command=self._on_mode).pack(side="left", padx=(8, 0))
 
-        self.status = tk.Label(panel, text="", bg=C["card"], fg=C["muted"], font=self.f_ui, anchor="w", justify="left")
+        self.status = tk.Label(panel, text="", height=1, width=1, bg=C["card"], fg=C["muted"], font=self.f_ui, anchor="w")
         self.status.pack(fill="x", padx=14, pady=(0, 2))
-        self.link = tk.Label(panel, text="", bg=C["card"], fg=C["muted"], font=self.f_small, anchor="w", justify="left")
-        self.link.pack(fill="x", padx=14, pady=(0, 8))
-        panel.bind("<Configure>", lambda e: [w.configure(wraplength=max(300, e.width - 40)) for w in (self.status, self.link)])
+        summary = tk.Frame(panel, bg=C["card"])
+        summary.pack(fill="x", padx=14, pady=(0, 8))
+        self.btn_details = ttk.Button(summary, text="查看运行详情", command=self.show_run_details)
+        self.btn_details.pack(side="right", padx=(10, 0))
+        self.link = tk.Label(summary, text="尚未更新", height=1, width=1, bg=C["card"], fg=C["muted"], font=self.f_small, anchor="w")
+        self.link.pack(side="left", fill="x", expand=True)
 
         cards = tk.Frame(self, bg=C["bg"])
         cards.pack(fill="x", padx=14, pady=(0, 8))
@@ -132,12 +134,13 @@ class ConsoleShellMixin:
             f = tk.Frame(cards, bg=C["card"], highlightbackground=C["line"], highlightthickness=1)
             f.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
             cards.columnconfigure(i, weight=1, uniform="card")
-            tk.Label(f, text=title, bg=C["card"], fg=C["muted"], font=self.f_small, anchor="w").pack(fill="x", padx=12, pady=(8, 0))
-            v = tk.Label(f, text="—", bg=C["card"], fg=C["head"], font=self.f_card, anchor="w", justify="left")
+            tk.Label(f, text=title, width=1, height=1, bg=C["card"], fg=C["muted"], font=self.f_small, anchor="w").pack(fill="x", padx=12, pady=(8, 0))
+            v = tk.Label(f, text="—", width=1, height=1, bg=C["card"], fg=C["head"], font=self.f_card, anchor="w")
             v.pack(fill="x", padx=12, pady=(0, 8))
             self.cards[key] = v
 
         self.nb = ttk.Notebook(self)
+        self.cards["yest"].configure(font=self.f_bold)
         self.nb.pack(fill="both", expand=True, padx=14, pady=(0, 14))
         self._build_posts_tab()
         self._build_kw_tab()

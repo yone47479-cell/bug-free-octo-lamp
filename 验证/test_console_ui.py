@@ -37,6 +37,23 @@ class ConsoleWindowTests(unittest.TestCase):
                     app.update()
                     self.assertEqual(app.nb.index(app.nb.select()), index)
                 app._select_tab(0)
+                # 复现真实运行后数十条来源诊断撑满主窗口的问题。
+                notes = [f"来源诊断 {i}：" + "抓取结果和模型校验详情。" * 15 for i in range(100)]
+                notes.append("⚠ 部分来源暂不可用，请查看详情。")
+                result = {"day": "2026-10-22", "picks": 34, "notes": notes,
+                          "blocks": [{"name": "布局验证示例", "text": "此为界面测试示例，不是实际推荐。", "weight": 23, "k": 1, "n": 1}]}
+                app.result, app.blocks = result, result["blocks"]
+                app._render_result(result)
+                app._set_status("已加载上次运行结果。\n" + "诊断详情" * 100)
+                app.update()
+                self.assertIn(notes[-1], app.log.get("1.0", "end"))
+                self.assertNotIn("\n", app.link["text"])
+                app.btn_details.invoke()
+                app.update()
+                details = [w for w in app.winfo_children() if isinstance(w, module.tk.Toplevel)]
+                self.assertEqual(len(details), 1)
+                self.assertEqual(details[0].title(), "运行详情")
+                details[0].destroy()
                 for width, height in ((960, 680), (1180, 900)):
                     app.geometry(f"{width}x{height}")
                     app.update()
@@ -44,7 +61,11 @@ class ConsoleWindowTests(unittest.TestCase):
                         self.assertTrue(control.winfo_ismapped())
                         self.assertGreater(control.winfo_width(), 20)
                         self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), app.winfo_rootx() + width)
-                    self.assertGreater(app.nb.winfo_height(), 180)
+                    self.assertGreater(app.nb.winfo_height(), height * .45)
+                    self.assertLess(app.status.winfo_height(), 40)
+                    self.assertLess(app.link.winfo_height(), 40)
+                    self.assertGreater(app.txt.winfo_height(), 80)
+                    self.assertTrue(app.btn_copy.winfo_ismapped())
                 with patch.object(app, "start_update") as update:
                     app.btn_go.invoke()
                     update.assert_called_once_with(True)
@@ -54,6 +75,7 @@ class ConsoleWindowTests(unittest.TestCase):
                 app._set_busy(False)
                 for state in ("run", "ok", "fail", "skip", "idle"):
                     app._set_step(0, state)
+                app._set_status("长文本布局验证：101 条诊断信息已收进运行详情，主内容区保持可用。")
                 app.update()
                 self.assertEqual(errors, [])
                 screenshot = os.environ.get("CONSOLE_SCREENSHOT")

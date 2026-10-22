@@ -852,7 +852,15 @@ class App(ConsoleShellMixin, tk.Tk if tk else object):                # type: ig
         threading.Thread(target=work, daemon=True).start()
 
     def _set_status(self, text: str, kind: str = "muted") -> None:
-        self.status.configure(text=text, fg=C.get(kind, C["muted"]))
+        self._status_detail = text
+        summary = text.splitlines()[0] if text else ""
+        if len(summary) > 65:
+            summary = summary[:62] + "…"
+        if "\n" in text or len(text) > 65:
+            summary += "（查看运行详情）"
+        self.status.configure(text=summary, fg=C.get(kind, C["muted"]))
+        if "\n" in text or len(text) > 120:
+            self._append_log(text)
 
     def _append_log(self, text: str) -> None:
         tag = ""
@@ -1767,7 +1775,34 @@ class App(ConsoleShellMixin, tk.Tk if tk else object):                # type: ig
         for note in res.get("notes") or []:
             warn = warn or note.startswith("⚠")
             lines.append(note if note.startswith("⚠") else "· " + note)
-        self.link.configure(text="\n".join(lines), fg=C["warn"] if warn else (C["ok"] if sd else C["muted"]))
+        details = "\n".join(lines)
+        if details and details != getattr(self, "_run_details", ""):
+            self._append_log("—— 本次运行详情 ——\n" + details)
+        self._run_details = details
+        notes = res.get("notes") or []
+        alerts = sum(note.startswith("⚠") for note in notes)
+        summary = (f"昨日复盘已衔接 · " if sd else "") + f"今日 {res.get('picks', 0)} 条推单 · {len(notes)} 条运行记录"
+        if alerts:
+            summary += f" · {alerts} 条警告"
+        self.link.configure(text=summary, fg=C["warn"] if warn else C["muted"])
+
+    def show_run_details(self) -> None:
+        """长诊断文本只在可滚动的窗口和日志中展示，不参与主窗口高度计算。"""
+        win = tk.Toplevel(self)
+        win.title("运行详情")
+        win.geometry("780x520")
+        win.minsize(480, 300)
+        win.transient(self)
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+        text = tk.Text(frame, wrap="word", font=self.f_ui, padx=12, pady=12, bd=0)
+        scroll = ttk.Scrollbar(frame, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        content = getattr(self, "_status_detail", "") + "\n\n" + getattr(self, "_run_details", "尚无运行记录。")
+        self._set_text(text, content.strip())
+        ttk.Button(win, text="关闭", command=win.destroy).pack(pady=(0, 12))
 
     def show_day_posts(self) -> None:
         """弹出窗口：看所选日期当天发出的推文原文（每次生成时存进历史的）。"""
@@ -1948,7 +1983,7 @@ class App(ConsoleShellMixin, tk.Tk if tk else object):                # type: ig
             if p["date"] == sd and p["play"] in ("竞足", "北单", "竞篮") and p["status"] in ("hit", "miss"):
                 n += 1
                 h += p["status"] == "hit"
-        self.cards["yest"].configure(text=f"{self.G.md(sd)} 命中 {h}/{n}（{h / n:.0%}）" if n else "—")
+        self.cards["yest"].configure(text=f"{sd[5:].replace('-', '/')}  {h}/{n} · {h / n:.0%}" if n else "—")
 
     def _fill_details(self) -> None:
         G = self.G
