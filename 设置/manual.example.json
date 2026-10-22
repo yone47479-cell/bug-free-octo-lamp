@@ -1,0 +1,44 @@
+{
+  "exclude_teams": [
+    "伯恩茅斯"
+  ],
+  "sfc_overrides": {
+    "2": "3/1",
+    "13": "3/1"
+  },
+  "extra_picks": [
+    {
+      "play": "竞足",
+      "market": "总进球",
+      "key": "周四012",
+      "pick": [
+        "2",
+        "3"
+      ],
+      "note": "前瞻比分2:0"
+    },
+    {
+      "play": "竞足",
+      "market": "比分",
+      "key": "周四008",
+      "pick": [
+        "1:2"
+      ]
+    }
+  ],
+  "day": "2026-10-15",
+  "require_notes": false,
+  "sources": [
+    "Sports Mole 赛前预览（示例，按实际来源填）"
+  ],
+  "match_notes": [
+    {
+      "teams": [
+        "托林斯|托伦斯",
+        "桑德兰"
+      ],
+      "verdict": "support",
+      "note": "桑德兰英超第17、缺4人；托林斯葡乙第15。前瞻0-2（这里写你查到的真实数据）"
+    }
+  ]
+}
