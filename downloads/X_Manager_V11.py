@@ -21,6 +21,11 @@ _embed_mod.__file__ = __file__
 _embed_sys.modules['xmanager_planning'] = _embed_mod
 exec(compile('"""Independent validation and identity ownership for recent-performance tasks."""\nfrom dataclasses import dataclass\nimport math\nimport re\nimport sqlite3\n\nACTIONS = (\'like\', \'repost\', \'comment\')\n\n@dataclass(frozen=True)\nclass TaskPlan:\n    actors: tuple[str, ...]\n    targets: tuple\n    limits: tuple\n    interval: float\n    comment_interval: float\n\n    @property\n    def total(self):\n        return len(self.targets) * sum(value for _, value in self.limits)\n\n    def summary(self):\n        values = dict(self.limits)\n        return (f\'执行环境 {len(self.actors)} 个 · 目标帖子 {len(self.targets)} 条\\n\'\n                f\'每帖：赞 {values["like"]} / 转 {values["repost"]} / 评 {values["comment"]}\\n\'\n                f\'最多 {self.total} 项；本人内容跳过；实际身份重复的环境停止执行。\\n\'\n                \'已完成操作不重复，结果不明的项目须人工核对。\')\n\n\ndef build_plan(actors, targets, limits, interval, comment_interval):\n    actors = tuple(dict.fromkeys(actors))\n    targets = tuple(targets)\n    if not actors or any(not isinstance(a, str) or not a or a.startswith(\'demo:\') for a in actors):\n        raise ValueError(\'请独立选择有效的执行账号环境\')\n    if not targets or len(targets) > 100:\n        raise ValueError(\'每批选择1～100条目标帖子\')\n    if len({t[0] for t in targets}) != len(targets):\n        raise ValueError(\'目标帖子重复\')\n    for pid, handle, url in targets:\n        if not str(pid).isdigit() or not re.fullmatch(r\'[A-Za-z0-9_]{1,15}\', handle):\n            raise ValueError(\'目标帖子身份无效\')\n        if url != f\'https://x.com/{handle}/status/{pid}\':\n            raise ValueError(\'目标链接与帖子身份不一致\')\n    if set(limits) != set(ACTIONS) or any(type(v) is not int or not 0 <= v <= 100 for v in limits.values()):\n        raise ValueError(\'各项数量必须为0～100的整数\')\n    if not any(limits.values()):\n        raise ValueError(\'至少启用一项操作\')\n    if limits[\'comment\'] > 1:\n        raise ValueError(\'保留全局评论去重，每帖最多一条评论\')\n    if max(limits.values()) > len(actors):\n        raise ValueError(\'执行环境数量不足，请增加账号或降低每帖数量\')\n    for value in (interval, comment_interval):\n        if isinstance(value, bool) or not math.isfinite(value) or not 0 <= value <= 86400:\n            raise ValueError(\'间隔必须为0～86400秒的有限数值\')\n    return TaskPlan(actors, targets, tuple((k, limits[k]) for k in ACTIONS), interval, comment_interval)\n\n\ndef bind_identity(store, batch, actor, handle):\n    handle = handle.lstrip(\'@\').casefold()\n    if not re.fullmatch(r\'[a-z0-9_]{1,15}\', handle):\n        raise ValueError(\'无法核验执行身份\')\n    with store.connection() as db:\n        db.execute(\'BEGIN IMMEDIATE\')\n        if not db.execute(\'SELECT 1 FROM recent_action_members WHERE batch=? AND actor=?\', (batch, actor)).fetchone():\n            raise ValueError(\'账号不在当前执行计划中\')\n        old = db.execute(\'SELECT handle FROM recent_actor_identities WHERE batch=? AND actor=?\', (batch, actor)).fetchone()\n        if old and old[0] != handle:\n            raise ValueError(\'执行过程中X账号发生变化\')\n        try:\n            db.execute(\'INSERT OR IGNORE INTO recent_actor_identities VALUES(?,?,?)\', (batch, actor, handle))\n            owner = db.execute(\'SELECT actor FROM recent_actor_identities WHERE batch=? AND handle=?\', (batch, handle)).fetchone()\n            if not owner or owner[0] != actor:\n                raise ValueError(\'该X账号已由本批另一个浏览器环境使用\')\n        except sqlite3.IntegrityError as exc:\n            raise ValueError(\'账号身份冲突\') from exc\n', 'xmanager_planning', "exec"), _embed_mod.__dict__)
 
+_embed_mod = _embed_types.ModuleType('xmanager_outgoing')
+_embed_mod.__file__ = __file__
+_embed_sys.modules['xmanager_outgoing'] = _embed_mod
+exec(compile('"""Persistent counts of confirmed outgoing actions, separate from received metrics."""\nimport re\nimport sqlite3\nimport time\nfrom pathlib import Path\n\nSCHEMA = \'\'\'\nCREATE TABLE IF NOT EXISTS outgoing_successes(\n account TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL,\n confirmed_at REAL NOT NULL, PRIMARY KEY(account,action,target));\n\'\'\'\n\n\ndef target_id(value):\n    value = str(value or \'\')\n    if value.isdigit():\n        return value\n    match = re.search(r\'/status/(\\d+)(?:[/?#]|$)\', value)\n    return match.group(1) if match else \'\'\n\n\ndef record(store, account, action, target, stamp=None):\n    target = target_id(target)\n    if not account or str(account).startswith(\'demo:\') or action not in (\'like\', \'comment\') or not target:\n        return False\n    with store.connection() as db:\n        result = db.execute(\'INSERT OR IGNORE INTO outgoing_successes VALUES(?,?,?,?)\',\n                            (str(account), action, target, time.time() if stamp is None else stamp))\n        return result.rowcount == 1\n\n\ndef sync_confirmed(store, comment_path):\n    """Import only explicit successful records; retries and refreshes are idempotent."""\n    records = []\n    comment_path = Path(comment_path)\n    if comment_path.is_file():\n        db = sqlite3.connect(comment_path.as_uri()+\'?mode=ro\', uri=True, timeout=30)\n        try:\n            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type=\'table\' AND name=\'drafts\'").fetchone()\n            if exists:\n                for scope, owner, target, updated in db.execute("SELECT scope,owner,item,updated FROM drafts WHERE state=\'sent\'"):\n                    # Panel scope includes account and outbox ID. Exclude DM records entirely.\n                    account = scope[6:].rsplit(\':\', 1)[0] if scope.startswith(\'panel:\') else owner\n                    records.append((account, \'comment\', target, updated))\n        finally:\n            db.close()\n    with store.connection() as db:\n        records.extend(tuple(r) for r in db.execute("SELECT actor,action,target,updated FROM recent_actions WHERE state=\'sent\' AND action IN (\'like\',\'comment\')"))\n        records.extend(tuple(r) for r in db.execute("SELECT account,\'comment\',target,updated FROM outbox WHERE state=\'sent\' AND kind=\'reply\'"))\n        # Collect inside one transaction; never count sent/reviewed records more than once.\n        db.executemany(\'INSERT OR IGNORE INTO outgoing_successes VALUES(?,?,?,?)\',\n                       [(str(a), k, target_id(t), stamp) for a,k,t,stamp in records\n                        if a and not str(a).startswith(\'demo:\') and target_id(t)])\n\n\ndef counts(store):\n    with store.connection() as db:\n        result = {}\n        for account, action, amount, latest in db.execute(\'SELECT account,action,COUNT(*),MAX(confirmed_at) FROM outgoing_successes GROUP BY account,action\'):\n            row = result.setdefault(account, dict(comments_sent_total=0,likes_sent_total=0, outgoing_latest=0))\n            row[\'comments_sent_total\' if action==\'comment\' else \'likes_sent_total\'] = amount\n            row[\'outgoing_latest\'] = max(row[\'outgoing_latest\'], latest)\n        return result\n', 'xmanager_outgoing', "exec"), _embed_mod.__dict__)
+
 _embed_mod = _embed_types.ModuleType('xmanager_ledger')
 _embed_mod.__file__ = __file__
 _embed_sys.modules['xmanager_ledger'] = _embed_mod
@@ -56,7 +61,7 @@ from pathlib import Path
 from typing import Dict
 
 APP_NAME = "X 浏览器任务管理器"
-APP_VERSION = "11.0.0"
+APP_VERSION = "11.0.1"
 
 
 def env_number(name: str, default: float, low: float, high: float) -> float:
@@ -2886,6 +2891,8 @@ class AccountDataStore:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(_DASH_SCHEMA)
             db.executescript(RECENT_SCHEMA)
+            from xmanager_outgoing import SCHEMA as OUTGOING_SCHEMA
+            db.executescript(OUTGOING_SCHEMA)
 
     @contextmanager
     def connection(self):
@@ -2993,6 +3000,15 @@ class AccountDataStore:
                 ),
             )
 
+    def record_outgoing_success(self, account, action, target):
+        from xmanager_outgoing import record
+        return record(self, account, action, target)
+
+    def outgoing_counts(self):
+        from xmanager_outgoing import counts, sync_confirmed
+        sync_confirmed(self, DATA_DIR / 'comment_queue.sqlite3')
+        return counts(self)
+
     def overview(self, day_start: float) -> List[Dict[str, Any]]:
         """每账号最新快照 + 今日新增（对比今天零点前最后一次快照，没有就对比最早一次）。"""
         with self.connection() as db:
@@ -3030,6 +3046,17 @@ class AccountDataStore:
             )
             row["inbox_new"] = fresh.get(row["account"], {})
             rows.append(row)
+        outgoing = self.outgoing_counts()
+        seen = {r['account'] for r in rows}
+        for account, values in outgoing.items():
+            if account not in seen:
+                rows.append(dict(account=account,name=account,handle='',outgoing_only=True,ts=values['outgoing_latest'],
+                    followers=None,following=None,likes=0,replies=0,reposts=0,views=0,posts=0,
+                    dm_unread=None,dm_convs=None,notif_unread=None,likes_today=0,replies_today=0,followers_today=0))
+        for row in rows:
+            values = outgoing.get(row['account'], {})
+            row['comments_sent_total'] = values.get('comments_sent_total', 0)
+            row['likes_sent_total'] = values.get('likes_sent_total', 0)
         return rows
 
     def trend(self, days: int = 7, now: Optional[float] = None) -> Tuple[List[str], List[int], List[int]]:
@@ -3471,6 +3498,8 @@ class AccountDataStore:
                     "累计获赞",
                     "今日新增获赞",
                     "累计评论回复",
+                    "累计成功发出评论数",
+                    "累计成功点赞数",
                     "今日新增评论",
                     "转发",
                     "浏览",
@@ -3492,6 +3521,8 @@ class AccountDataStore:
                         r["likes"],
                         r["likes_today"],
                         r["replies"],
+                        r["comments_sent_total"],
+                        r["likes_sent_total"],
                         r["replies_today"],
                         r["reposts"],
                         r["views"],
@@ -6017,6 +6048,10 @@ class ExecutorBase:
             self.click(button)
             art.locator('[data-testid="unlike"]').first.wait_for(state="visible", timeout=self.timeout(2000))
             self.m.stats["likes"] += 1
+            try:
+                get_store().record_outgoing_success(self.m.browser_id, 'like', self.status_url(art))
+            except Exception:
+                logger.exception('点赞已确认，但独立累计记录保存失败')
         except (
             StopRequested,
             DurationReached,
@@ -9037,6 +9072,10 @@ class ScoredWorkflowExecutor:
                 state="visible", timeout=self.timeout(2000)
             )
             self.m.stats["likes"] += 1
+            try:
+                get_store().record_outgoing_success(self.m.browser_id, 'like', self.status_url(art))
+            except Exception:
+                logger.exception('点赞已确认，但独立累计记录保存失败')
         except (
             StopRequested,
             DurationReached,
@@ -13542,7 +13581,7 @@ DEMO = AccountDataStore.DEMO_PREFIX
 
 class DashboardPage(Page):
     key, icon, title = "dash", "📊", "数据看板"
-    subtitle = "各账号的粉丝、获赞、评论与红点（只读采集）"
+    subtitle = "收到的互动与主动操作独立统计；主动操作仅计已确认成功，不含尝试和待核对"
     auto_refresh = True
 
     COLS = (
@@ -13552,6 +13591,8 @@ class DashboardPage(Page):
         ("followers", "粉丝", 58, "e"),
         ("likes", "累计获赞", 72, "e"),
         ("likes_today", "今日+", 50, "e"),
+        ("likes_sent_total", "累计成功点赞数", 130, "e"),
+        ("comments_sent_total", "累计成功发出评论数", 150, "e"),
         ("replies", "累计评论", 72, "e"),
         ("replies_today", "今日+", 50, "e"),
         ("dm", "私信未读", 70, "e"),
@@ -13579,17 +13620,19 @@ class DashboardPage(Page):
         kpis.grid(row=1, column=0, sticky="ew", padx=px(18))
         self.kpi: Dict[str, Tuple[tk.StringVar, tk.StringVar]] = {}
         specs = (
-            ("accounts", "已采集账号", UI["blue"]),
+            ("accounts", "已记录账号", UI["blue"]),
             ("followers", "粉丝合计", UI["text"]),
             ("likes", "累计获赞", UI["pink"]),
-            ("replies", "累计评论回复", UI["amber"]),
+            ("replies", "累计收到评论回复", UI["amber"]),
+            ("comments_sent_total", "累计成功发出评论数", UI["green"]),
+            ("likes_sent_total", "累计成功点赞数", UI["blue"]),
             ("dm", "私信未读", UI["green"]),
             ("pending", "待发回复", UI["blue"]),
         )
         for i, (key, title, color) in enumerate(specs):
-            kpis.columnconfigure(i, weight=1, uniform="kpi")
+            kpis.columnconfigure(i % 4, weight=1, uniform="kpi")
             outer, body = card(kpis)
-            outer.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else px(10), 0))
+            outer.grid(row=i // 4, column=i % 4, sticky="nsew", padx=(0 if i % 4 == 0 else px(10), 0), pady=(0, px(6)))
             tk.Label(body, text=title, bg=UI["card"], fg=UI["mute"], font=F(9)).pack(anchor="w")
             value, sub = tk.StringVar(value="—"), tk.StringVar(value=" ")
             tk.Label(body, textvariable=value, bg=UI["card"], fg=color, font=F(22, True)).pack(anchor="w")
@@ -13728,6 +13771,10 @@ class DashboardPage(Page):
     def refresh(self, force: bool = False) -> None:
         app, store = self.app, self.app.store
         rows = store.overview(local_midnight())
+        names = app.account_names()
+        for row in rows:
+            if row.get('outgoing_only'):
+                row['name'] = names.get(row['account'], row['name'])
         pending = store.pending_counts()
         labels, likes7, replies7 = store.trend(7)
         events = store.recent_events(30)
@@ -13783,6 +13830,8 @@ class DashboardPage(Page):
                     fmt_num(r["followers"]),
                     fmt_num(r["likes"]),
                     f"+{r['likes_today']}" if r["likes_today"] else "·",
+                    fmt_num(r["likes_sent_total"]),
+                    fmt_num(r["comments_sent_total"]),
                     fmt_num(r["replies"]),
                     f"+{r['replies_today']}" if r["replies_today"] else "·",
                     fmt_num(r["dm_unread"]),
@@ -13814,7 +13863,7 @@ class DashboardPage(Page):
         n = app.settings.dash.get("stats_posts", 20)
         demo = any(r["account"].startswith(DEMO) for r in rows)
         self.hint.set(
-            f"获赞 / 评论 = 最近 {n} 条帖子的合计"
+            f"获赞/收到评论=已追踪帖子合计；主动评论/点赞=已确认成功，同账号同帖去重"
             + ("　｜　当前包含演示数据（设置 › 数据管理 可清除）" if demo else "")
         )
         self._feed(events)
@@ -13825,8 +13874,11 @@ class DashboardPage(Page):
 
         kpi = self.kpi
         followers = [r["followers"] for r in rows if r["followers"] is not None]
+        for key in ('comments_sent_total', 'likes_sent_total'):
+            kpi[key][0].set(fmt_num(total(key)))
+            kpi[key][1].set('仅计成功；同账号同帖去重')
         kpi["accounts"][0].set(str(len(rows)))
-        kpi["accounts"][1].set(f"最近一次采集 {ago(max(r['ts'] for r in rows))}" if rows else "尚未采集")
+        kpi["accounts"][1].set(f"最近记录 {ago(max(r['ts'] for r in rows))}" if rows else "尚未采集")
         kpi["followers"][0].set(compact_num(sum(followers)) if followers else "—")
         kpi["followers"][1].set(f"今日 {sum(r['followers_today'] for r in rows):+d}" if rows else " ")
         kpi["likes"][0].set(compact_num(total("likes")) if rows else "—")
